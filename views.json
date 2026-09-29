@@ -1,13 +1,76 @@
 [
   {
     "name": "week",
-    "title": "This week",
-    "subtitle": "Skin Clinic for Claude Code: what needs attention, rendered by npm run view",
+    "title": "The week",
+    "subtitle": "Skin Clinic for Claude Code: the book and what wants a decision, rendered by npm run view",
     "sections": [
       {
-        "title": "Needs attention",
-        "note": "TODO(author): point this at the industry's attention view (overdue, stuck, quiet).",
-        "sql": "select 'replace me' as item, 'TODO(author)' as why"
+        "title": "Booked, next 7 days",
+        "note": "UNCONFIRMED rows are tomorrow's no-shows unless someone calls.",
+        "sql": "select to_char(on_date, 'Dy DD Mon') as day, substr(starts_at::text, 1, 5) as at, practitioner, client, treatment, case when status = 'booked' then 'UNCONFIRMED' else status end as state from v_appointments where on_date between current_date and current_date + 7 and status in ('booked', 'confirmed') order by on_date, starts_at"
+      },
+      {
+        "title": "Open complications",
+        "note": "The client comes before everything else on this page.",
+        "sql": "select ref, client, severity, to_char(reported_on, 'DD Mon') as reported, days_open || ' days' as open, description, coalesce(action, 'NONE RECORDED') as action, case when follow_up_booked then 'yes' else 'NO' end as visit_booked from v_complications where status = 'open' order by reported_on"
+      },
+      {
+        "title": "Treatment records not finalised",
+        "note": "Another practitioner must be able to take over care from the record. Oldest first.",
+        "sql": "select to_char(on_date, 'DD Mon') as treated, days_since || ' days' as age, client, practitioner, treatment, coalesce(record_ref, ref) as ref, upper(record_state) as state from v_records_due order by on_date"
+      },
+      {
+        "title": "Reviews and rebooks due, next 14 days or overdue",
+        "sql": "select to_char(due_on, 'DD Mon YYYY') as due, kind, client, treatment as after, contacts, coalesce(phone, email, '') as contact, case when kind = 'review' then 'clinical: call' when marketing_opt_in then 'message' when marketing_opt_in is null then 'call' else 'leave it' end as how from v_followups where due_on <= current_date + 14 and next_appt_on is null order by kind desc, due_on"
+      }
+    ]
+  },
+  {
+    "name": "clinical",
+    "title": "The clinical record",
+    "subtitle": "Scripts, consents, batches and photos, straight off the records",
+    "sections": [
+      {
+        "title": "Current scripts",
+        "note": "Every one after an in-person or video consultation with a prescriber. One client per script.",
+        "sql": "select ref, client, prescriber, to_char(consult_on, 'DD Mon') as consulted, replace(consult_mode, '_', ' ') as how, product_kind as for, max_quantity || ' ' || unit as up_to, treatments_used || '/' || treatments_allowed as used, to_char(valid_until, 'DD Mon YYYY') as valid_until from v_scripts where current order by valid_until"
+      },
+      {
+        "title": "Consents running out or incomplete",
+        "sql": "select ref, client, consent_group as for, to_char(signed_on, 'DD Mon YYYY') as signed, to_char(expires_on, 'DD Mon YYYY') as expires, case when financial_consent then 'yes' else 'NO' end as financial, case when copy_given then 'yes' else 'NO' end as copy_given, coalesce(to_char(cooling_off_until, 'DD Mon'), '') as cooling_off_until from v_consents where status = 'active' and expires_on >= current_date and (expires_on <= current_date + 30 or not financial_consent or not copy_given or cooling_off_until >= current_date) order by expires_on"
+      },
+      {
+        "title": "Batches, first to expire first",
+        "note": "An expired batch is never used. Trace any batch to the clients who received it.",
+        "sql": "select batch_no as batch, product, on_hand || ' ' || unit as on_hand, to_char(expires_on, 'DD Mon YYYY') as expires, case when expired then 'EXPIRED' when days_to_expiry <= 45 then days_to_expiry || ' days' else '' end as state from v_batches where on_hand > 0 order by expires_on"
+      },
+      {
+        "title": "Photos marked for advertising",
+        "sql": "select c.name as client, ph.kind, to_char(ph.taken_on, 'DD Mon YYYY') as taken, case when c.photo_consent = 'advertising' and c.ad_consent_withdrawn_on is null then 'covered' else 'NO CONSENT: take it down' end as consent from photos ph join clients c on c.id = ph.client_id where ph.advertising order by ph.taken_on"
+      }
+    ]
+  },
+  {
+    "name": "money",
+    "title": "Money and stock",
+    "subtitle": "Takings, who owes, packages and what to reorder",
+    "sections": [
+      {
+        "title": "Takings by line, last 30 days",
+        "sql": "select line, round(sum(takings_cents) / 100.0, 2) as invoiced from v_takings where on_date > current_date - 30 group by line order by 2 desc"
+      },
+      {
+        "title": "Who owes the clinic",
+        "sql": "select client, ref, to_char(issued_on, 'DD Mon YYYY') as issued, round(balance_cents / 100.0, 2) as owing, days_overdue from v_invoices where status = 'sent' and balance_cents > 0 order by days_overdue desc"
+      },
+      {
+        "title": "Packages with sessions left",
+        "note": "Packages are for skin treatments only; one on a cosmetic procedure is flagged.",
+        "sql": "select ref, client, treatment, sessions_left || ' of ' || sessions_total as left, to_char(expires_on, 'DD Mon YYYY') as expires, round(unused_value_cents / 100.0, 2) as unused_value, case when cosmetic_procedure then 'NOT ALLOWED' else '' end as flag from v_packages where status = 'active' order by expires_on"
+      },
+      {
+        "title": "Stock to reorder",
+        "sql": "select sku, name, usable || ' ' || unit as usable, reorder_at || ' ' || unit as reorder_at from v_stock where active and low order by kind, sku"
       }
     ]
   }

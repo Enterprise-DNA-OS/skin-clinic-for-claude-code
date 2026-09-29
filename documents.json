@@ -1,11 +1,83 @@
 [
   {
-    "name": "example",
-    "title": "TODO(author): the first document this industry must produce",
-    "for_each": "select gen_random_uuid() as id, 'Example' as name",
+    "name": "invoice",
+    "title": "Tax invoice",
+    "for_each": "select id, ref || ' ' || client as name from v_invoices where status in ('sent', 'paid')",
     "file": "name",
     "sections": [
-      { "title": "Details", "sql": "select 'replace me' as item, $1::text as record_id" }
+      {
+        "title": "Invoice",
+        "sql": "select i.ref as invoice, c.name as billed_to, to_char(i.issued_on, 'DD Mon YYYY') as issued, to_char(i.due_on, 'DD Mon YYYY') as due from invoices i join clients c on c.id = i.client_id where i.id = $1"
+      },
+      {
+        "title": "Items",
+        "sql": "select description, qty, round(unit_cents / 100.0, 2) as unit, round(qty * unit_cents / 100.0, 2) as amount from invoice_items where invoice_id = $1"
+      },
+      {
+        "title": "Payments and balance",
+        "sql": "select round(total_cents / 100.0, 2) as total, round(paid_cents / 100.0, 2) as paid, round(balance_cents / 100.0, 2) as balance, initcap(status) as status from v_invoices where id = $1"
+      }
+    ]
+  },
+  {
+    "name": "consent",
+    "title": "Consent record",
+    "for_each": "select id, ref || ' ' || client as name from v_consents where status = 'active'",
+    "file": "name",
+    "sections": [
+      {
+        "title": "Consent",
+        "note": "A copy of this record is given to the client (Ahpra non-surgical cosmetic guidelines s5.3). Written information about the procedure, its risks, alternatives, the practitioner's qualifications and the full cost is given with it.",
+        "sql": "select k.ref, c.name as client, to_char(c.date_of_birth, 'DD Mon YYYY') as born, k.consent_group as treatment, to_char(k.signed_on, 'DD Mon YYYY') as signed, to_char(k.expires_on, 'DD Mon YYYY') as covers_until, case when k.financial_consent then 'given' else 'NOT GIVEN' end as financial_consent, coalesce(p.name, '') as taken_by from consents k join clients c on c.id = k.client_id left join practitioners p on p.id = k.practitioner_id where k.id = $1"
+      },
+      {
+        "title": "Cooling-off",
+        "note": "For a client under 18: at least seven days between this consent and the procedure, and no payment other than the consultation before then.",
+        "sql": "select case when cooling_off_until is null then 'Not applicable: 18 or over when signed' else 'No procedure and no payment before ' || to_char(cooling_off_until, 'DD Mon YYYY') end as cooling_off from consents where id = $1"
+      }
+    ]
+  },
+  {
+    "name": "aftercare",
+    "title": "Your aftercare",
+    "for_each": "select r.id, r.ref || ' ' || c.name as name from records r join clients c on c.id = r.client_id join treatments t on t.id = r.treatment_id where t.cosmetic_procedure and r.on_date >= current_date - 30",
+    "file": "name",
+    "sections": [
+      {
+        "title": "Your treatment",
+        "note": "Keep this. It names what was used, so any practitioner can look after you.",
+        "sql": "select c.name as client, to_char(r.on_date, 'DD Mon YYYY') as date, t.name as treatment, coalesce(r.areas, '') as areas, p.name as practitioner from records r join clients c on c.id = r.client_id join treatments t on t.id = r.treatment_id join practitioners p on p.id = r.practitioner_id where r.id = $1"
+      },
+      {
+        "title": "Product used",
+        "sql": "select pr.name as product, u.quantity || ' ' || pr.unit as quantity, b.batch_no as batch from product_usage u join batches b on b.id = u.batch_id join products pr on pr.id = b.product_id where u.record_id = $1"
+      },
+      {
+        "title": "Your follow-up",
+        "note": "Call the clinic straight away about pain that is getting worse, skin that turns pale, blue or dusky, blisters, a fever, or any change in your vision. After hours, go to your nearest emergency department.",
+        "sql": "select case kind when 'review' then 'Review visit' when 'rebook' then 'Next treatment due' else kind end as what, to_char(due_on, 'DD Mon YYYY') as when from followups where record_id = $1 order by due_on"
+      }
+    ]
+  },
+  {
+    "name": "treatment-record",
+    "title": "Treatment record",
+    "for_each": "select id, ref || ' ' || client as name from v_records where status = 'final' and not imported",
+    "file": "name",
+    "sections": [
+      {
+        "title": "Record",
+        "note": "Detailed enough for another practitioner to take over care (Ahpra non-surgical cosmetic guidelines s7.7).",
+        "sql": "select ref, client, practitioner, treatment, to_char(on_date, 'DD Mon YYYY') as date, coalesce(areas, '') as areas, coalesce(script_ref, '') as script, coalesce(consent_ref, '') as consent from v_records where id = $1"
+      },
+      {
+        "title": "Product and batch",
+        "sql": "select pr.name as product, u.quantity || ' ' || pr.unit as quantity, b.batch_no as batch, to_char(b.expires_on, 'DD Mon YYYY') as batch_expiry from product_usage u join batches b on b.id = u.batch_id join products pr on pr.id = b.product_id where u.record_id = $1"
+      },
+      {
+        "title": "Notes and addenda",
+        "sql": "select 'Notes' as entry, coalesce(notes, '') as text from records where id = $1 union all select 'Addendum ' || to_char(created_at, 'DD Mon YYYY'), body from record_addenda where record_id = $1"
+      }
     ]
   }
 ]
